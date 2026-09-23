@@ -151,6 +151,7 @@ main {
 .report-stat.warning .stat-num { color: #d97706; }
 .report-stat.info .stat-num { color: var(--brand-dark); }
 .report-stat.pages .stat-num { color: #334155; }
+.report-stat.ok .stat-num { color: var(--ok-dark); }
 
 .report-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .filter-chip {
@@ -751,3 +752,105 @@ main {
   color: #b91c1c;
 }
 .quote-reasons li { margin: 2px 0; }
+
+/* ---------- 批量印前校验 ---------- */
+.batch-card h2 { margin: 0 0 8px; font-size: 18px; }
+.batch-intro { margin: 0 0 14px; color: var(--muted); font-size: 14px; }
+.batch-files { display: flex; gap: 12px; margin-bottom: 12px; }
+.batch-file-pick {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 2px dashed #9db8e8;
+  border-radius: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+  background: #f8faff;
+}
+.batch-file-pick:hover { border-color: var(--brand); background: #f0f5ff; }
+.batch-file-label {
+  font-weight: 700;
+  color: #fff;
+  background: var(--brand);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.batch-file-name { color: var(--muted); font-size: 13px; word-break: break-all; }
+.batch-btn-row { margin-top: 4px; }
+.batch-file-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.batch-file-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  background: #fff;
+}
+.batch-file-idx {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #eaf1ff;
+  color: var(--brand-dark);
+  font-weight: 700;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.batch-file-name-item { flex: 1; word-break: break-all; }
+.batch-file-size { flex: none; color: var(--muted); font-size: 12px; }
+.batch-table tr.batch-row { cursor: pointer; }
+.batch-table tr.batch-row:hover { background: #f0f5ff; }
+.batch-table tr.batch-row.expanded { background: #eaf1ff; }
+.batch-table tr.batch-row.failed td { color: var(--danger); }
+.batch-table tr.batch-row.failed .batch-name { color: var(--danger); }
+.batch-idx { font-weight: 700; color: var(--muted); text-align: center; }
+.batch-name { word-break: break-all; }
+.batch-state {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.batch-state.ok { background: #ecfdf3; color: var(--ok-dark); border: 1px solid #a7e7c0; }
+.batch-state.bad { background: #fef2f2; color: #b91c1c; border: 1px solid #f3b4b4; }
+.batch-state.failed { background: #f3f4f6; color: #6b7280; border: 1px solid var(--line); }
+.batch-row-hint { color: var(--muted); font-size: 12px; font-weight: 400; }
+.batch-detail-row td { background: #fbfcfe; padding: 0; }
+.batch-detail-inner { padding: 10px 14px; }
+.batch-detail-inner .issue-list { margin: 0; }
+.batch-fail-reason {
+  margin: 0;
+  color: #b91c1c;
+  font-size: 13px;
+  background: #fef2f2;
+  border: 1px solid #f3b4b4;
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.batch-clean { margin: 0; color: var(--ok-dark); font-size: 13px; }
+.batch-code-table code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  background: #eef3fb;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.batch-code-files { font-size: 12px; color: #334155; }
+.batch-code-empty { text-align: center; color: var(--muted); }

@@ -1366,3 +1366,365 @@ quoteDownloadBtn.addEventListener('click', () => {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
+
+// ---------- 批量印前校验 ----------
+
+const BATCH_FILE_LIMIT = 10;
+
+const batchFilesInput = document.getElementById('batch-files-input');
+const batchPickName = document.getElementById('batch-pick-name');
+const batchFileListEl = document.getElementById('batch-file-list');
+const batchRunBtn = document.getElementById('batch-run-btn');
+const batchClearBtn = document.getElementById('batch-clear-btn');
+const batchStatusEl = document.getElementById('batch-status');
+const batchReportEl = document.getElementById('batch-report');
+const batchVerdictEl = document.getElementById('batch-verdict');
+const batchSummaryEl = document.getElementById('batch-summary');
+const batchTableBody = document.getElementById('batch-table-body');
+const batchFileCountEl = document.getElementById('batch-file-count');
+const batchCodeTableBody = document.getElementById('batch-code-table-body');
+const batchCodeCountEl = document.getElementById('batch-code-count');
+const batchDownloadBtn = document.getElementById('batch-download-btn');
+
+let batchFiles = [];
+let batchReportData = null;
+
+const BATCH_STATUS_LABELS = {
+  completed_passed: '通过',
+  completed_failed: '有错误',
+  failed: '校验失败',
+};
+
+const BATCH_FAILURE_TEXT = {
+  not_pdf: '不是 PDF 文件（文件头不是 %PDF-，或文件为空）',
+  invalid_pdf: '文件损坏或无法解析，不是有效的 PDF',
+  encrypted_pdf: 'PDF 已加密，无法校验',
+  empty_document: 'PDF 不包含任何页面',
+};
+
+function setBatchStatus(text, kind) {
+  batchStatusEl.textContent = text || '';
+  batchStatusEl.className = kind ? `status ${kind}` : 'status';
+}
+
+function updateBatchButtons() {
+  batchRunBtn.disabled = batchFiles.length === 0;
+  batchClearBtn.disabled = batchFiles.length === 0;
+}
+
+function clearBatchReport() {
+  batchReportData = null;
+  batchReportEl.hidden = true;
+  batchTableBody.innerHTML = '';
+  batchCodeTableBody.innerHTML = '';
+  batchSummaryEl.innerHTML = '';
+  batchVerdictEl.textContent = '';
+}
+
+function renderBatchFileList() {
+  batchFileListEl.innerHTML = '';
+  if (batchFiles.length === 0) {
+    batchFileListEl.hidden = true;
+    batchPickName.textContent = '点击选择 1～10 个 PDF 文件';
+    return;
+  }
+  batchFileListEl.hidden = false;
+  batchPickName.textContent = `已选择 ${batchFiles.length} 个 PDF（点击可重新选择）`;
+  const frag = document.createDocumentFragment();
+  batchFiles.forEach((file, i) => {
+    const li = document.createElement('li');
+    li.className = 'batch-file-item';
+    const idx = document.createElement('span');
+    idx.className = 'batch-file-idx';
+    idx.textContent = String(i + 1);
+    const name = document.createElement('span');
+    name.className = 'batch-file-name-item';
+    name.textContent = file.name;
+    const size = document.createElement('span');
+    size.className = 'batch-file-size';
+    size.textContent = `${(file.size / 1024 / 1024).toFixed(2)} MB`;
+    li.append(idx, name, size);
+    frag.appendChild(li);
+  });
+  batchFileListEl.appendChild(frag);
+}
+
+batchFilesInput.addEventListener('change', () => {
+  const picked = Array.from(batchFilesInput.files || []);
+  clearBatchReport();
+  if (picked.length === 0) {
+    batchFiles = [];
+    renderBatchFileList();
+    updateBatchButtons();
+    return;
+  }
+  if (picked.length > BATCH_FILE_LIMIT) {
+    setBatchStatus(`批量校验一次最多选择 ${BATCH_FILE_LIMIT} 个 PDF，当前选了 ${picked.length} 个。`, 'error');
+    batchFiles = [];
+    batchFilesInput.value = '';
+    renderBatchFileList();
+    updateBatchButtons();
+    return;
+  }
+  // 前端给出类型提示；即使选错也照常上传，由服务端在该文件结果中标记 not_pdf
+  const nonPdf = picked.filter((f) => f.type && f.type !== 'application/pdf'
+    && !/\.pdf$/i.test(f.name));
+  if (nonPdf.length) {
+    setBatchStatus(`所选文件中 ${nonPdf.length} 个不是 .pdf 文件，校验时会分别记录失败原因。`, 'error');
+  } else {
+    setBatchStatus('', '');
+  }
+  batchFiles = picked;
+  renderBatchFileList();
+  updateBatchButtons();
+});
+
+batchClearBtn.addEventListener('click', () => {
+  batchFiles = [];
+  batchFilesInput.value = '';
+  clearBatchReport();
+  renderBatchFileList();
+  updateBatchButtons();
+  setBatchStatus('', '');
+});
+
+batchRunBtn.addEventListener('click', async () => {
+  if (batchFiles.length === 0) return;
+  batchRunBtn.disabled = true;
+  batchClearBtn.disabled = true;
+  setBatchStatus(`正在按顺序校验 ${batchFiles.length} 个 PDF，不生成拼版文件…`, 'info');
+  clearBatchReport();
+
+  const form = new FormData();
+  batchFiles.forEach((file) => form.append('pdfs', file));
+
+  try {
+    const resp = await fetch('/api/preflight/batch', { method: 'POST', body: form });
+    if (!resp.ok) {
+      let message = `批量校验失败（HTTP ${resp.status}）`;
+      try {
+        const data = await resp.json();
+        if (data && data.error) message = data.error;
+      } catch (_) { /* 非 JSON 错误响应，使用默认提示 */ }
+      throw new Error(message);
+    }
+    batchReportData = await resp.json();
+    renderBatchReport(batchReportData);
+    const { summary } = batchReportData;
+    if (summary.failed > 0) {
+      setBatchStatus(`批量校验完成：${summary.completed} 个成功、${summary.failed} 个文件无法校验；`
+        + `成功文件共发现 ${summary.error} 个错误、${summary.warning} 个警告、${summary.info} 个提示。`, 'error');
+    } else if (summary.error > 0) {
+      setBatchStatus(`批量校验完成：${summary.passed} / ${summary.total} 个文件通过；`
+        + `共 ${summary.error} 个错误、${summary.warning} 个警告、${summary.info} 个提示。`, 'error');
+    } else if (summary.warning > 0 || summary.info > 0) {
+      setBatchStatus(`批量校验完成：全部 ${summary.total} 个文件无错误级问题；`
+        + `${summary.warning} 个警告、${summary.info} 个提示。`, 'info');
+    } else {
+      setBatchStatus(`批量校验完成：全部 ${summary.total} 个文件通过，未发现印前问题。`, 'info');
+    }
+  } catch (err) {
+    clearBatchReport();
+    setBatchStatus(err.message || '批量校验失败', 'error');
+  } finally {
+    batchRunBtn.disabled = false;
+    batchClearBtn.disabled = false;
+  }
+});
+
+function renderBatchSummary(summary) {
+  batchSummaryEl.innerHTML = '';
+  const cards = [
+    { level: 'pages', label: '文件总数', count: summary.total },
+    { level: 'ok', label: '校验通过', count: summary.passed },
+    { level: 'error', label: '无法校验', count: summary.failed },
+    { level: 'error', label: '错误', count: summary.error },
+    { level: 'warning', label: '警告', count: summary.warning },
+    { level: 'info', label: '提示', count: summary.info },
+  ];
+  for (const card of cards) {
+    const div = document.createElement('div');
+    div.className = `report-stat ${card.level}`;
+    div.innerHTML = `<span class="stat-num">${card.count}</span>`
+      + `<span class="stat-label">${card.label}</span>`;
+    batchSummaryEl.appendChild(div);
+  }
+}
+
+/**
+ * 在可展开行下方插入整行明细：失败文件显示失败原因；成功文件复用单文件
+ * 报告的问题区段渲染逻辑（徽章 + 标题 + 范围 + 说明 + 修复建议）。
+ */
+function buildBatchDetailRow(item) {
+  const detailTr = document.createElement('tr');
+  detailTr.className = 'batch-detail-row';
+  const td = document.createElement('td');
+  td.colSpan = 8;
+  const inner = document.createElement('div');
+  inner.className = 'batch-detail-inner';
+
+  if (item.status === 'failed') {
+    const p = document.createElement('p');
+    p.className = 'batch-fail-reason';
+    p.textContent = `失败原因：${item.error
+      || (BATCH_FAILURE_TEXT[item.errorCode] || '未知错误')}`;
+    inner.appendChild(p);
+  } else {
+    const report = item.report;
+    if (!report || !report.issues.length) {
+      const p = document.createElement('p');
+      p.className = 'batch-clean';
+      p.textContent = '未发现印前问题，可以直接拼版。';
+      inner.appendChild(p);
+    } else {
+      const list = document.createElement('ul');
+      list.className = 'issue-list';
+      for (const issue of report.issues) {
+        list.appendChild(buildBatchIssueElement(issue));
+      }
+      inner.appendChild(list);
+    }
+  }
+  td.appendChild(inner);
+  detailTr.appendChild(td);
+  return detailTr;
+}
+
+function buildBatchIssueElement(issue) {
+  const li = document.createElement('li');
+  li.className = `issue ${issue.severity}`;
+
+  const head = document.createElement('div');
+  head.className = 'issue-head';
+  const badge = document.createElement('span');
+  badge.className = `severity-badge ${issue.severity}`;
+  badge.textContent = SEVERITY_LABELS[issue.severity];
+  const title = document.createElement('span');
+  title.className = 'issue-title';
+  title.textContent = issue.title;
+  const range = document.createElement('span');
+  range.className = 'issue-range';
+  range.textContent = formatRange(issue)
+    + (issue.pageCount > 1 ? `（连续 ${issue.pageCount} 页）` : '');
+  head.append(badge, title, range);
+  li.appendChild(head);
+
+  const message = document.createElement('p');
+  message.className = 'issue-message';
+  message.textContent = issue.message;
+  li.appendChild(message);
+
+  if (issue.values && issue.values.length) {
+    const dl = document.createElement('dl');
+    dl.className = 'issue-values';
+    for (const value of issue.values) {
+      const dt = document.createElement('dt');
+      dt.textContent = value.label;
+      const dd = document.createElement('dd');
+      dd.textContent = value.value;
+      dl.append(dt, dd);
+    }
+    li.appendChild(dl);
+  }
+
+  const advice = document.createElement('p');
+  advice.className = 'issue-advice';
+  advice.innerHTML = `<strong>修复建议：</strong>${escapeHtml(issue.advice)}`;
+  li.appendChild(advice);
+  return li;
+}
+
+function renderBatchTable(files) {
+  batchTableBody.innerHTML = '';
+  batchFileCountEl.textContent = String(files.length);
+  const frag = document.createDocumentFragment();
+  files.forEach((item) => {
+    const tr = document.createElement('tr');
+    const failed = item.status === 'failed';
+    tr.className = failed ? 'batch-row failed' : 'batch-row';
+
+    const state = failed
+      ? BATCH_STATUS_LABELS.failed
+      : (item.passed ? BATCH_STATUS_LABELS.completed_passed : BATCH_STATUS_LABELS.completed_failed);
+    const stateClass = failed ? 'failed' : (item.passed ? 'ok' : 'bad');
+    const counts = item.counts || { error: 0, warning: 0, info: 0, issuesTotal: 0 };
+
+    tr.innerHTML = `<td class="batch-idx">${item.index + 1}</td>`
+      + `<td><span class="batch-state ${stateClass}">${state}</span></td>`
+      + `<td class="batch-name">${escapeHtml(item.file && item.file.name ? item.file.name : '未命名文件')}</td>`
+      + `<td>${item.pageCount === null ? '—' : `${item.pageCount} 页`}</td>`
+      + `<td>${counts.error}</td><td>${counts.warning}</td><td>${counts.info}</td>`
+      + `<td>${counts.issuesTotal}${failed ? ` <span class="batch-row-hint">（点击查看原因）</span>` : ''}</td>`;
+
+    // 点击主行切换该文件的明细行展开状态
+    const detailTr = buildBatchDetailRow(item);
+    detailTr.hidden = true;
+    tr.addEventListener('click', () => {
+      const willOpen = detailTr.hidden;
+      detailTr.hidden = !willOpen;
+      tr.classList.toggle('expanded', willOpen);
+    });
+    frag.appendChild(tr);
+    frag.appendChild(detailTr);
+  });
+  batchTableBody.appendChild(frag);
+}
+
+function renderBatchCodeTotals(issueTotals) {
+  batchCodeTableBody.innerHTML = '';
+  batchCodeCountEl.textContent = String(issueTotals.length);
+  if (!issueTotals.length) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td colspan="6" class="batch-code-empty">全部文件均未发现印前问题。</td>';
+    batchCodeTableBody.appendChild(tr);
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  for (const item of issueTotals) {
+    const tr = document.createElement('tr');
+    const fileText = item.files
+      .map((f) => `${f.index + 1}. ${f.name || '未命名文件'}`)
+      .join('；');
+    tr.innerHTML = `<td><code>${escapeHtml(item.code)}</code></td>`
+      + `<td><span class="severity-badge ${item.severity}">${SEVERITY_LABELS[item.severity]}</span></td>`
+      + `<td>${escapeHtml(item.title)}</td>`
+      + `<td>${item.count}</td>`
+      + `<td>${item.fileCount}</td>`
+      + `<td class="batch-code-files">${escapeHtml(fileText)}</td>`;
+    frag.appendChild(tr);
+  }
+  batchCodeTableBody.appendChild(frag);
+}
+
+function renderBatchReport(data) {
+  batchReportEl.hidden = false;
+  const { summary } = data;
+  batchVerdictEl.className = `report-verdict ${summary.allPassed ? 'ok' : 'bad'}`;
+  if (summary.failed > 0) {
+    batchVerdictEl.textContent = `结论：共 ${summary.total} 个文件，${summary.completed} 个完成校验`
+      + `（其中 ${summary.passed} 个通过），${summary.failed} 个文件无法校验（缺失/非 PDF/损坏/加密），`
+      + '请展开对应行查看失败原因。';
+  } else if (summary.allPassed) {
+    batchVerdictEl.textContent = `结论：全部 ${summary.total} 个文件均无错误级问题，警告/提示可选择性处理。`;
+  } else {
+    batchVerdictEl.textContent = `结论：${summary.total} 个文件全部完成校验，其中 ${summary.passed} 个通过；`
+      + `共 ${summary.error} 个错误级问题，建议修复后再印刷。`;
+  }
+  renderBatchSummary(summary);
+  renderBatchTable(data.files);
+  renderBatchCodeTotals(data.issueTotals);
+}
+
+batchDownloadBtn.addEventListener('click', () => {
+  if (!batchReportData) return;
+  const json = JSON.stringify(batchReportData, null, 2);
+  const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = '批量印前校验报告.json';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});

@@ -5,6 +5,11 @@ const express = require('express');
 const multer = require('multer');
 const { imposePdf, parseMaxSheetsPerSignature } = require('./lib/impose');
 const { preflightPdf } = require('./lib/preflight');
+const {
+  preflightPdfBatch,
+  looksLikePdf: bufferLooksLikePdf,
+  BATCH_PREFLIGHT_MAX_FILES,
+} = require('./lib/preflight-batch');
 const { diffPreflightReports } = require('./lib/preflight-diff');
 const { buildPaperQuote } = require('./lib/quote');
 
@@ -33,10 +38,7 @@ app.get('/api/health', (req, res) => {
  * application/octet-stream 上传时，回退校验文件名后缀。
  */
 function looksLikePdf(file) {
-  if (!file) return false;
-  if (file.buffer.slice(0, 5).toString('latin1') === '%PDF-') return true;
-  return (!file.mimetype || file.mimetype === 'application/octet-stream')
-    && /\.pdf$/i.test(file.originalname || '');
+  return bufferLooksLikePdf(file.buffer, file.originalname, file.mimetype);
 }
 
 function missingFileResponse(res) {
@@ -61,6 +63,46 @@ app.post('/api/preflight', upload.single('pdf'), async (req, res) => {
       error: `无法校验该 PDF：${err && err.message ? err.message : '未知错误'}`,
     });
   }
+});
+
+// 批量印前校验：multipart 字段 pdfs 一次接收 1～10 个 PDF，按上传顺序逐个
+// 复用单文件校验。单个文件缺失/为空、非 PDF、损坏或加密时只在该文件结果中
+// 记录失败原因（status=failed + errorCode/error），不阻断其他文件；
+// 只要批量请求本身可解析就整体返回 200（含部分或全部文件失败的情况）。
+const batchUpload = upload.array('pdfs', BATCH_PREFLIGHT_MAX_FILES);
+
+app.post('/api/preflight/batch', (req, res) => {
+  batchUpload(req, res, (err) => {
+    if (err) {
+      // multer .array() 超过 maxCount 或出现其他文件字段时都会抛
+      // LIMIT_UNEXPECTED_FILE；LIMIT_FILE_COUNT 为 busboy 全局文件数上限，
+      // 一并按「数量/字段不合法」返回 400
+      if (err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE') {
+        return res.status(400).json({
+          error: `请通过字段 pdfs 上传 1～${BATCH_PREFLIGHT_MAX_FILES} 个 PDF 文件`,
+        });
+      }
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({
+          error: `文件超过大小限制（${MAX_FILE_SIZE / 1024 / 1024}MB）`,
+        });
+      }
+      return res.status(500).json({ error: '上传解析失败' });
+    }
+
+    const files = req.files || [];
+    if (files.length === 0) {
+      return res.status(400).json({
+        error: `请通过字段 pdfs 上传 1～${BATCH_PREFLIGHT_MAX_FILES} 个 PDF 文件`,
+      });
+    }
+
+    preflightPdfBatch(files)
+      .then((report) => res.json(report))
+      .catch((batchErr) => res.status(500).json({
+        error: `批量校验失败：${batchErr && batchErr.message ? batchErr.message : '未知错误'}`,
+      }));
+  });
 });
 
 // 印前报告差异对比：分别上传基准 PDF 与待交付 PDF，复用逐页校验后按

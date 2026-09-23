@@ -6,6 +6,7 @@ const multer = require('multer');
 const { imposePdf, parseMaxSheetsPerSignature } = require('./lib/impose');
 const { preflightPdf } = require('./lib/preflight');
 const { diffPreflightReports } = require('./lib/preflight-diff');
+const { MAX_BATCH_FILES, buildBatchReport } = require('./lib/preflight-batch');
 const { buildPaperQuote } = require('./lib/quote');
 
 const app = express();
@@ -61,6 +62,56 @@ app.post('/api/preflight', upload.single('pdf'), async (req, res) => {
       error: `无法校验该 PDF：${err && err.message ? err.message : '未知错误'}`,
     });
   }
+});
+
+// 批量印前校验：字段 pdfs 一次上传 1～10 个 PDF，按上传顺序逐个复用单文件校验。
+// 单个文件非 PDF、损坏或加密时仅记录该文件的失败原因，不阻断其他文件；
+// 只要请求本身合法（1～10 个文件）即返回 200 批量结果，逐文件标明成功/失败。
+app.post('/api/preflight/batch', (req, res, next) => {
+  upload.array('pdfs', MAX_BATCH_FILES)(req, res, async (uploadErr) => {
+    if (uploadErr) {
+      if (uploadErr.code === 'LIMIT_UNEXPECTED_FILE') {
+        return res.status(400).json({
+          error: `批量校验一次最多上传 ${MAX_BATCH_FILES} 个 PDF 文件`,
+        });
+      }
+      return next(uploadErr); // 单文件超限等交由兜底中间件返回 413
+    }
+    const files = req.files || [];
+    if (!files.length) {
+      return res.status(400).json({
+        error: `请通过字段 pdfs 上传 1～${MAX_BATCH_FILES} 个 PDF 文件`,
+      });
+    }
+    try {
+      const entries = [];
+      for (const file of files) {
+        const meta = { name: file.originalname, sizeBytes: file.size };
+        if (!looksLikePdf(file)) {
+          entries.push({ file: meta, failure: { code: 'not_pdf', message: '仅支持 PDF 文件' } });
+          continue;
+        }
+        try {
+          const report = await preflightPdf(file.buffer, {
+            fileName: file.originalname,
+            sizeBytes: file.size,
+          });
+          entries.push({ file: meta, report });
+        } catch (preflightErr) {
+          entries.push({
+            file: meta,
+            failure: {
+              code: 'unreadable',
+              message: `无法校验该 PDF：${preflightErr && preflightErr.message ? preflightErr.message : '未知错误'}`,
+            },
+          });
+        }
+      }
+      return res.json(buildBatchReport(entries));
+    } catch (err) {
+      return next(err);
+    }
+  });
 });
 
 // 印前报告差异对比：分别上传基准 PDF 与待交付 PDF，复用逐页校验后按

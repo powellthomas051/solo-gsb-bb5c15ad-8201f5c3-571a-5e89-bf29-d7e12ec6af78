@@ -93,6 +93,24 @@
       <p id="diff-status" class="status" role="status"></p>
     </section>
 
+    <section id="batch-card" class="card batch-card">
+      <h2>批量印前校验</h2>
+      <p class="batch-intro">
+        一次选择 <strong>1～10 个</strong> PDF，服务端按选择顺序逐个执行与单文件一致的印前校验；
+        单个文件非 PDF、损坏或加密时只记录该文件的失败原因，<strong>不影响其他文件</strong>。
+        结果按文件列出通过状态与错误/警告/提示数量，并按问题代码汇总总次数与涉及文件；
+        只做检查、不生成拼版文件。
+      </p>
+      <label class="batch-file-pick" for="batch-input">
+        <span class="batch-file-label">批量 PDF（1～10 个）</span>
+        <input type="file" id="batch-input" accept="application/pdf,.pdf" multiple hidden />
+        <span class="batch-file-name" id="batch-file-name">点击选择多个 PDF</span>
+      </label>
+      <ul id="batch-file-list" class="batch-file-list" hidden></ul>
+      <button id="batch-btn" class="btn primary" disabled>开始批量校验</button>
+      <p id="batch-status" class="status" role="status"></p>
+    </section>
+
     <section id="diff-report" class="card diff-report-card" hidden>
       <div class="report-head">
         <h2>差异对比结果</h2>
@@ -120,6 +138,44 @@
               </tr>
             </thead>
             <tbody id="diff-page-table-body"></tbody>
+          </table>
+        </div>
+      </details>
+    </section>
+
+    <section id="batch-report" class="card batch-report-card" hidden>
+      <div class="report-head">
+        <h2>批量校验结果</h2>
+        <button id="batch-download-btn" class="btn small success" type="button">下载批量 JSON</button>
+      </div>
+      <p id="batch-verdict" class="report-verdict"></p>
+      <div id="batch-summary" class="report-summary"></div>
+
+      <details class="page-details" open>
+        <summary>按问题代码汇总（<span id="batch-code-count">0</span> 种问题）</summary>
+        <div class="table-wrap">
+          <table class="page-table batch-code-table">
+            <thead>
+              <tr>
+                <th>级别</th><th>问题</th><th>总次数</th><th>涉及文件</th>
+              </tr>
+            </thead>
+            <tbody id="batch-code-body"></tbody>
+          </table>
+        </div>
+      </details>
+
+      <details class="page-details" open>
+        <summary>文件结果（<span id="batch-file-count">0</span> 个文件，点击「展开」查看明细）</summary>
+        <div class="table-wrap">
+          <table class="page-table batch-file-table">
+            <thead>
+              <tr>
+                <th>#</th><th>文件</th><th>状态</th>
+                <th>错误</th><th>警告</th><th>提示</th><th>明细</th>
+              </tr>
+            </thead>
+            <tbody id="batch-file-body"></tbody>
           </table>
         </div>
       </details>

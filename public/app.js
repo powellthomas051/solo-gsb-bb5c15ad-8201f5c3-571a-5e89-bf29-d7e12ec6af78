@@ -955,6 +955,308 @@ diffDownloadBtn.addEventListener('click', () => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 
+// ---------- 批量印前校验 ----------
+
+const batchInput = document.getElementById('batch-input');
+const batchFileName = document.getElementById('batch-file-name');
+const batchFileListEl = document.getElementById('batch-file-list');
+const batchBtn = document.getElementById('batch-btn');
+const batchStatusEl = document.getElementById('batch-status');
+const batchReportEl = document.getElementById('batch-report');
+const batchVerdictEl = document.getElementById('batch-verdict');
+const batchSummaryEl = document.getElementById('batch-summary');
+const batchCodeBody = document.getElementById('batch-code-body');
+const batchCodeCount = document.getElementById('batch-code-count');
+const batchFileBody = document.getElementById('batch-file-body');
+const batchFileCount = document.getElementById('batch-file-count');
+const batchDownloadBtn = document.getElementById('batch-download-btn');
+
+const BATCH_MAX_FILES = 10;
+
+let batchFiles = [];
+let batchReportData = null;
+
+function setBatchStatus(text, kind) {
+  batchStatusEl.textContent = text || '';
+  batchStatusEl.className = kind ? `status ${kind}` : 'status';
+}
+
+/**
+ * 重新选择批量文件时清空上一次批量结果；报告 JSON 通过 Blob 下载。
+ */
+function clearBatchReport() {
+  batchReportData = null;
+  batchReportEl.hidden = true;
+  batchCodeBody.innerHTML = '';
+  batchFileBody.innerHTML = '';
+  batchSummaryEl.innerHTML = '';
+  batchVerdictEl.textContent = '';
+}
+
+function renderBatchFileList() {
+  batchFileListEl.innerHTML = '';
+  batchFiles.forEach((file, i) => {
+    const li = document.createElement('li');
+    const index = document.createElement('span');
+    index.className = 'batch-file-index';
+    index.textContent = `${i + 1}. `;
+    const name = document.createElement('span');
+    name.textContent = `${file.name}（${(file.size / 1024 / 1024).toFixed(2)} MB）`;
+    li.append(index, name);
+    batchFileListEl.appendChild(li);
+  });
+  batchFileListEl.hidden = batchFiles.length === 0;
+}
+
+function updateBatchButton() {
+  batchBtn.disabled = batchFiles.length === 0;
+}
+
+batchInput.addEventListener('change', () => {
+  const picked = Array.from(batchInput.files || []);
+  clearBatchReport();
+  if (!picked.length) {
+    batchFiles = [];
+    batchFileName.textContent = '点击选择多个 PDF';
+    renderBatchFileList();
+    updateBatchButton();
+    return;
+  }
+  if (picked.length > BATCH_MAX_FILES) {
+    // 保留此前选择，仅提示超限；接口侧同样会拒绝超过 10 个的请求
+    setBatchStatus(`一次最多选择 ${BATCH_MAX_FILES} 个 PDF（本次选择了 ${picked.length} 个），请减少后重选`, 'error');
+    batchInput.value = '';
+    return;
+  }
+  // 非 PDF 文件不在前端拦截：交由服务端标记为该文件的失败，不影响其他文件
+  batchFiles = picked;
+  batchFileName.textContent = `已选 ${picked.length} 个文件`;
+  setBatchStatus('', '');
+  renderBatchFileList();
+  updateBatchButton();
+});
+
+batchBtn.addEventListener('click', async () => {
+  if (!batchFiles.length) return;
+  batchBtn.disabled = true;
+  setBatchStatus(`正在按顺序逐个校验 ${batchFiles.length} 个 PDF（单个失败不影响其他文件）…`, 'info');
+  clearBatchReport();
+
+  const form = new FormData();
+  for (const file of batchFiles) form.append('pdfs', file);
+
+  try {
+    const resp = await fetch('/api/preflight/batch', { method: 'POST', body: form });
+    if (!resp.ok) {
+      let message = `批量校验失败（HTTP ${resp.status}）`;
+      try {
+        const data = await resp.json();
+        if (data && data.error) message = data.error;
+      } catch (_) { /* 非 JSON 错误响应，使用默认提示 */ }
+      throw new Error(message);
+    }
+    batchReportData = await resp.json();
+    renderBatchReport(batchReportData);
+    const s = batchReportData.summary;
+    const rejected = s.total - s.passed - s.failed;
+    if (s.failed > 0 || rejected > 0) {
+      setBatchStatus(`批量校验完成：${s.passed} 个通过、${rejected} 个存在错误级问题、`
+        + `${s.failed} 个无法校验（详见文件结果表）。`, 'error');
+    } else if (s.warning > 0 || s.info > 0) {
+      setBatchStatus(`批量校验完成：${s.total} 个文件全部通过（无错误级问题）；`
+        + `合计 ${s.warning} 个警告、${s.info} 个提示。`, 'info');
+    } else {
+      setBatchStatus(`批量校验完成：${s.total} 个文件全部通过，未发现印前问题。`, 'info');
+    }
+  } catch (err) {
+    setBatchStatus(err.message || '批量校验失败', 'error');
+  } finally {
+    batchBtn.disabled = false;
+  }
+});
+
+function renderBatchReport(data) {
+  renderBatchVerdict(data);
+  renderBatchSummary(data);
+  renderBatchCodeTable(data);
+  renderBatchFileTable(data);
+  batchReportEl.hidden = false;
+}
+
+function renderBatchVerdict(data) {
+  const s = data.summary;
+  const rejected = s.total - s.passed - s.failed;
+  const bad = s.failed > 0 || rejected > 0;
+  batchVerdictEl.className = `report-verdict ${bad ? 'bad' : 'ok'}`;
+  batchVerdictEl.textContent = `结论：共 ${s.total} 个文件，${s.passed} 个通过、`
+    + `${rejected} 个存在错误级问题、${s.failed} 个无法校验；`
+    + `合计错误 ${s.error} 个、警告 ${s.warning} 个、提示 ${s.info} 个。`;
+}
+
+function renderBatchSummary(data) {
+  const s = data.summary;
+  batchSummaryEl.innerHTML = '';
+  const cards = [
+    { level: 'pages', label: '文件总数', count: s.total },
+    { level: 'ok', label: '通过', count: s.passed },
+    { level: 'error', label: '存在错误', count: s.total - s.passed - s.failed },
+    { level: 'warning', label: '无法校验', count: s.failed },
+  ];
+  for (const card of cards) {
+    const div = document.createElement('div');
+    div.className = `report-stat ${card.level}`;
+    div.innerHTML = `<span class="stat-num">${card.count}</span>`
+      + `<span class="stat-label">${card.label}</span>`;
+    batchSummaryEl.appendChild(div);
+  }
+}
+
+function renderBatchCodeTable(data) {
+  batchCodeBody.innerHTML = '';
+  batchCodeCount.textContent = String(data.byCode.length);
+  const frag = document.createDocumentFragment();
+  if (!data.byCode.length) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td colspan="4" class="batch-empty-cell">成功校验的文件均未发现印前问题</td>';
+    frag.appendChild(tr);
+  }
+  for (const bucket of data.byCode) {
+    const tr = document.createElement('tr');
+    const filesText = bucket.files
+      .map((f) => f.name || `文件 ${f.index + 1}`)
+      .join('、');
+    tr.innerHTML = `<td><span class="severity-badge ${bucket.severity}">${SEVERITY_LABELS[bucket.severity]}</span></td>`
+      + `<td>${escapeHtml(bucket.title)}<span class="batch-code">${escapeHtml(bucket.code)}</span></td>`
+      + `<td>${bucket.total}</td>`
+      + `<td>${bucket.fileCount} 个：${escapeHtml(filesText)}</td>`;
+    frag.appendChild(tr);
+  }
+  batchCodeBody.appendChild(frag);
+}
+
+function renderBatchFileTable(data) {
+  batchFileBody.innerHTML = '';
+  batchFileCount.textContent = String(data.files.length);
+  const frag = document.createDocumentFragment();
+  for (const fileEntry of data.files) {
+    const tr = document.createElement('tr');
+    tr.className = fileEntry.ok
+      ? (fileEntry.passed ? 'clean' : 'has-issue')
+      : 'batch-row-failed';
+
+    const statusText = !fileEntry.ok ? '无法校验' : (fileEntry.passed ? '通过' : '未通过');
+    const statusClass = !fileEntry.ok ? 'fail' : (fileEntry.passed ? 'ok' : 'bad');
+    const counts = fileEntry.ok ? fileEntry.counts : null;
+    const sizeText = typeof fileEntry.file.sizeBytes === 'number'
+      ? `${(fileEntry.file.sizeBytes / 1024 / 1024).toFixed(2)} MB`
+      : '';
+
+    tr.innerHTML = `<td>${fileEntry.index + 1}</td>`
+      + `<td class="batch-file-cell">${escapeHtml(fileEntry.file.name || '未命名')}`
+      + `<span class="batch-file-size">${sizeText}</span></td>`
+      + `<td><span class="batch-status ${statusClass}">${statusText}</span></td>`
+      + `<td>${counts ? counts.error : '—'}</td>`
+      + `<td>${counts ? counts.warning : '—'}</td>`
+      + `<td>${counts ? counts.info : '—'}</td>`;
+
+    const toggleTd = document.createElement('td');
+    const toggleBtn = document.createElement('button');
+    toggleBtn.type = 'button';
+    toggleBtn.className = 'batch-toggle';
+    toggleBtn.textContent = '展开';
+    toggleTd.appendChild(toggleBtn);
+    tr.appendChild(toggleTd);
+
+    const detailTr = document.createElement('tr');
+    detailTr.className = 'batch-detail-row';
+    detailTr.hidden = true;
+    const detailTd = document.createElement('td');
+    detailTd.colSpan = 7;
+    detailTd.appendChild(buildBatchDetail(fileEntry));
+    detailTr.appendChild(detailTd);
+
+    toggleBtn.addEventListener('click', () => {
+      const show = detailTr.hidden;
+      detailTr.hidden = !show;
+      toggleBtn.textContent = show ? '收起' : '展开';
+    });
+
+    frag.append(tr, detailTr);
+  }
+  batchFileBody.appendChild(frag);
+}
+
+/**
+ * 文件行的展开明细：成功文件列出问题区段（级别 + 范围 + 说明），
+ * 失败文件给出失败原因。
+ */
+function buildBatchDetail(fileEntry) {
+  const wrap = document.createElement('div');
+  wrap.className = 'batch-detail';
+  if (!fileEntry.ok) {
+    const p = document.createElement('p');
+    p.className = 'batch-failure';
+    p.textContent = `失败原因：${fileEntry.failure.message}`;
+    wrap.appendChild(p);
+    return wrap;
+  }
+  if (!fileEntry.issues.length) {
+    const p = document.createElement('p');
+    p.className = 'batch-clean';
+    p.textContent = `未发现印前问题（共 ${fileEntry.pageCount} 页）。`;
+    wrap.appendChild(p);
+    return wrap;
+  }
+  const head = document.createElement('p');
+  head.className = 'batch-detail-head';
+  head.textContent = `共 ${fileEntry.pageCount} 页，${fileEntry.issues.length} 类问题：`;
+  wrap.appendChild(head);
+
+  const ul = document.createElement('ul');
+  ul.className = 'issue-list';
+  for (const issue of fileEntry.issues) {
+    const li = document.createElement('li');
+    li.className = `issue ${issue.severity}`;
+
+    const headRow = document.createElement('div');
+    headRow.className = 'issue-head';
+    const badge = document.createElement('span');
+    badge.className = `severity-badge ${issue.severity}`;
+    badge.textContent = SEVERITY_LABELS[issue.severity];
+    const title = document.createElement('span');
+    title.className = 'issue-title';
+    title.textContent = issue.title;
+    const range = document.createElement('span');
+    range.className = 'issue-range';
+    range.textContent = formatRange(issue);
+    headRow.append(badge, title, range);
+    li.appendChild(headRow);
+
+    const message = document.createElement('p');
+    message.className = 'issue-message';
+    message.textContent = issue.message;
+    li.appendChild(message);
+
+    ul.appendChild(li);
+  }
+  wrap.appendChild(ul);
+  return wrap;
+}
+
+batchDownloadBtn.addEventListener('click', () => {
+  if (!batchReportData) return;
+  const json = JSON.stringify(batchReportData, null, 2);
+  const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = '批量印前校验报告.json';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+
 // ---------- 印刷用纸规格维护 ----------
 
 const PAPER_STORAGE_KEY = 'booklet-imposer-papers-v1';

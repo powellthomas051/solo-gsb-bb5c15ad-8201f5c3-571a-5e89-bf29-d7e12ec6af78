@@ -251,6 +251,85 @@ function jsonRequest(server, urlPath, payload) {
     });
     assert.strictEqual(recheck.status, 200);
 
+    // ---------- 批量印前校验 /api/preflight/batch ----------
+    // 四个文件：两份相同的问题 PDF（5 页，180° 旋转 + 补白）、一份损坏、一份非 PDF
+    const batchBody = multipartBody({
+      files: [
+        { field: 'pdfs', filename: 'first.pdf', contentType: 'application/pdf', data: pdfBytes },
+        { field: 'pdfs', filename: 'second.pdf', contentType: 'application/pdf', data: pdfBytes },
+        { field: 'pdfs', filename: 'broken.pdf', contentType: 'application/pdf', data: Buffer.from('%PDF-broken') },
+        { field: 'pdfs', filename: 'note.txt', contentType: 'text/plain', data: Buffer.from('hello') },
+      ],
+    }, boundary);
+    const batchResp = await request(server, 'POST', '/api/preflight/batch', {
+      body: batchBody,
+      headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': batchBody.length },
+    });
+    assert.strictEqual(batchResp.status, 200);
+    const batch = JSON.parse(batchResp.body.toString());
+    assert.strictEqual(batch.kind, 'preflight-batch');
+    assert.strictEqual(batch.maxFiles, 10);
+    assert.strictEqual(batch.summary.total, 4);
+    assert.strictEqual(batch.summary.succeeded, 2);
+    assert.strictEqual(batch.summary.failed, 2);
+    assert.strictEqual(batch.summary.passed, 0);
+    assert.strictEqual(batch.summary.error, 2); // 每份 1 个 180° 错误
+    assert.strictEqual(batch.summary.info, 2); // 每份 1 条补白提示
+
+    // 逐文件结果与输入顺序一致；失败文件记录原因但不阻断其他文件
+    assert.strictEqual(batch.files.length, 4);
+    assert.deepStrictEqual(batch.files.map((f) => f.file.name),
+      ['first.pdf', 'second.pdf', 'broken.pdf', 'note.txt']);
+    assert.strictEqual(batch.files[0].ok, true);
+    assert.strictEqual(batch.files[0].passed, false);
+    assert.strictEqual(batch.files[0].pageCount, 5);
+    assert.strictEqual(batch.files[0].counts.error, 1);
+    assert.ok(batch.files[0].issues.some((i) => i.code === 'rotated_180'));
+    assert.strictEqual(batch.files[2].ok, false);
+    assert.strictEqual(batch.files[2].failure.code, 'unreadable');
+    assert.match(batch.files[2].failure.message, /无法校验/);
+    assert.strictEqual(batch.files[3].ok, false);
+    assert.strictEqual(batch.files[3].failure.code, 'not_pdf');
+
+    // 按问题代码汇总：总次数跨文件累计，涉及文件按输入顺序；错误级排在提示级之前
+    const rotatedBucket = batch.byCode.find((b) => b.code === 'rotated_180');
+    assert.strictEqual(rotatedBucket.total, 2);
+    assert.strictEqual(rotatedBucket.fileCount, 2);
+    assert.deepStrictEqual(rotatedBucket.files.map((f) => f.name), ['first.pdf', 'second.pdf']);
+    const blankBucket = batch.byCode.find((b) => b.code === 'blank_padding');
+    assert.strictEqual(blankBucket.total, 2); // 文档级问题每文件计 1
+    assert.strictEqual(batch.byCode[0].code, 'rotated_180');
+
+    // 未上传文件 -> 400
+    const noFiles = await request(server, 'POST', '/api/preflight/batch', {
+      body: empty,
+      headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': empty.length },
+    });
+    assert.strictEqual(noFiles.status, 400);
+
+    // 超过 10 个文件 -> 400
+    const tooManyBody = multipartBody({
+      files: Array.from({ length: 11 }, (_v, i) => ({
+        field: 'pdfs', filename: `f${i}.pdf`, contentType: 'application/pdf', data: pdfBytes,
+      })),
+    }, boundary);
+    const tooManyBatch = await request(server, 'POST', '/api/preflight/batch', {
+      body: tooManyBody,
+      headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': tooManyBody.length },
+    });
+    assert.strictEqual(tooManyBatch.status, 400);
+    assert.match(JSON.parse(tooManyBatch.body.toString()).error, /最多上传 10/);
+
+    // 批量接口的使用不影响单文件校验（再次调用仍 200）
+    const afterBatch = await request(server, 'POST', '/api/preflight', {
+      body,
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': body.length,
+      },
+    });
+    assert.strictEqual(afterBatch.status, 200);
+
     // 4. 校验失败/有错误不阻断：同一文件仍可拼版，返回 application/pdf
     const imposeBody = multipartBody({
       files: [{ field: 'pdf', filename: 'sample.pdf', contentType: 'application/pdf', data: pdfBytes }],
@@ -366,7 +445,8 @@ function jsonRequest(server, urlPath, payload) {
     assert.match(JSON.parse(badJson.body.toString()).error, /JSON/);
 
     console.log('✅ HTTP 集成测试通过：preflight 200 返回 JSON（含错误不阻断），缺文件 400，');
-    console.log('   非 PDF 400，损坏文件 422；同一份带错误报告的 PDF 仍可成功 /api/impose');
+    console.log('   非 PDF 400，损坏文件 422；同一份带错误报告的 PDF 仍可成功 /api/impose；');
+    console.log('   批量校验混合文件整体 200（失败隔离），缺文件 400，超 10 个 400');
   } finally {
     server.close();
   }

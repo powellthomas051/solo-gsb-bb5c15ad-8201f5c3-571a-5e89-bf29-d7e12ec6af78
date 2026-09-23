@@ -412,6 +412,92 @@ main {
 .diff-code-chip.resolved { background: #dcfce7; color: var(--ok-dark); }
 .diff-code-chip.persistent { background: #fef3c7; color: #b45309; }
 
+/* ---------- 批量印前校验 ---------- */
+.batch-card h2 { margin: 0 0 8px; font-size: 18px; }
+.batch-intro {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.batch-file-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 2px dashed #9db8e8;
+  border-radius: 10px;
+  padding: 14px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.batch-file-pick:hover { border-color: var(--brand); background: #f0f5ff; }
+.batch-file-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--brand-dark);
+}
+.batch-file-name {
+  font-size: 13px;
+  color: var(--ink);
+  word-break: break-all;
+}
+.batch-file-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  font-size: 13px;
+}
+.batch-file-list li { padding: 2px 0; word-break: break-all; }
+.batch-file-index { color: var(--muted); }
+
+.batch-status {
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 4px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.batch-status.ok { background: #dcfce7; color: var(--ok-dark); }
+.batch-status.bad { background: #fee2e2; color: var(--danger); }
+.batch-status.fail { background: #eef1f4; color: #334155; }
+
+.batch-toggle {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--brand-dark);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.batch-toggle:hover { background: #f0f5ff; border-color: var(--brand); }
+
+.batch-code-table { min-width: 560px; }
+.batch-file-table { min-width: 720px; }
+.batch-code {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.batch-empty-cell {
+  text-align: center;
+  color: var(--muted);
+}
+.batch-file-cell { word-break: break-all; }
+.batch-file-size {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}
+.page-table tbody tr.batch-row-failed { background: #fef2f2; }
+.batch-detail-row td { background: #f8fafc; padding: 12px 16px; }
+.batch-detail-head { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+.batch-failure { margin: 0; font-size: 13px; color: #b91c1c; }
+.batch-clean { margin: 0; font-size: 13px; color: var(--ok-dark); }
+
 @media (max-width: 640px) {
   .diff-files { grid-template-columns: 1fr; }
   .diff-arrow { text-align: center; transform: rotate(90deg); }
